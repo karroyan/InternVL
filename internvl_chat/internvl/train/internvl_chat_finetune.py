@@ -879,7 +879,7 @@ def compute_json_metric(pred):
     else:
         key_list = ['sentiment_category', 'sentiment_degree', 'intention_detection', 'offensiveness_detection']
     sentiment_category = ['happiness', 'love', 'anger', 'sorrow', 'fear', 'hate', 'surprise']
-    intention_detection = ['interactive', 'expressive', 'entertaining', 'offensive', 'other']
+    intention_detection = ['interactive', 'expressive', 'entertaining', 'offensive']
     sentiment_dict = {}
     intention_dict = {}
     sentiment_length_dict = {}
@@ -1229,7 +1229,7 @@ def main():
     set_seed(training_args.seed)
     training_args.remove_unused_columns = False
     training_args.eval_steps=50
-    training_args.per_device_eval_batch_size=8
+    training_args.per_device_eval_batch_size=1
 
     if data_args.use_packed_ds:
         collator = partial(
