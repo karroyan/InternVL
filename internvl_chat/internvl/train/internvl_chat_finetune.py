@@ -11,10 +11,14 @@ import random
 import sys
 import traceback
 import warnings
+import csv
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Dict, Literal, Optional
+from FlagEmbedding import FlagModel
+from matplotlib import pyplot as plt
 
 import numpy as np
 
@@ -56,10 +60,11 @@ from PIL import Image, ImageFile, PngImagePlugin, UnidentifiedImageError
 from torch.utils.data import Dataset
 from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
                           HfArgumentParser, Trainer, TrainingArguments,
-                          set_seed)
+                          set_seed, TrainerCallback, GenerationConfig)
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils.logging import (enable_default_handler,
                                         enable_explicit_format, set_verbosity)
+from sentence_transformers import SentenceTransformer, util, models
 
 # Try to import petrel_client for image loading, fallback to PIL if unavailable
 try:
@@ -191,6 +196,10 @@ class DataTrainingArguments:
     meta_path: str = field(
         default=None,
         metadata={'help': 'The path of the meta file of datasets.'},
+    )
+    meta_path_eval: Optional[str] = field(
+        default=None,
+        metadata={'help': 'The path of the meta file of eval datasets.'},
     )
     use_data_resampling: bool = field(
         default=False,
@@ -711,12 +720,16 @@ def build_datasets(
     min_num_frame=8,
     max_num_frame=32,
     normalize_type='imagenet',
+    train = True
 ):
     datasets = []
     lengths = []
+    if train:
+        ds_collections = json.loads(open(data_args.meta_path).read())
+    else:
+        ds_collections = json.loads(open(data_args.meta_path_eval).read())
     data_rank = dist.get_rank()
     data_world_size = dist.get_world_size()
-    ds_collections = json.loads(open(data_args.meta_path).read())
     for ds_idx, ds_name in enumerate(ds_collections.keys()):
         repeat_time = ds_collections[ds_name]['repeat_time']
         if 'max_dynamic_patch' in ds_collections[ds_name]:
@@ -794,6 +807,189 @@ def len2weight(x, loss_reduction):
         return 1 / (x ** 0.5)
     raise NotImplementedError(loss_reduction)
 
+class EvaluateFirstStepCallback(TrainerCallback):
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step == 1:
+            control.should_evaluate = True
+
+def preprocess_logits_for_metrics(logits, labels):
+    """
+    Original Trainer may have a memory leak. 
+    This is a workaround to avoid storing too many tensors that are not needed.
+    """
+    pred_ids = torch.argmax(logits, dim=-1)
+    return pred_ids, labels
+
+
+class SimilarityModel():
+    def __init__(self):
+        SIM_MODEL = 'bge'
+        if SIM_MODEL == 'miniLM':
+            model_path = '/mnt/afs/niuyazhe/data/all-MiniLM-L6-v2'
+            word_embedding_model = models.Transformer(model_path, max_seq_length=256)
+            pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension())
+            self.model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
+        elif SIM_MODEL == 'bge':
+            model_path = '/mnt/afs/share/bge-base-zh-v1.5'
+            self.model = FlagModel(model_path, 
+                  query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
+                  use_fp16=True)
+
+    def compare_similarity(self, output_str, label_str_list, y_pred=None):
+        embeddings_output = self.model.encode(output_str)
+
+        high_cosine_score =-1
+        output = output_str
+        for id, label_str in enumerate(label_str_list):
+            embeddings_label = self.model.encode(label_str)
+            cosine_scores = util.cos_sim(embeddings_output, embeddings_label).item()
+            if cosine_scores > high_cosine_score:
+                output = label_str
+                high_cosine_score = cosine_scores
+        return output
+
+def format_label(label, result):
+    cleaned_labels=[]
+    for l in label:
+        l = l.replace('<|end|>', '')
+        l = l.replace("\'", "\"")
+        l = l.replace("\"s ", "\'s ")
+        cleaned_labels.append(l)
+
+    cleaned_results=[]
+    for r in result:
+        r = r.replace('<|end|>', '')
+        r = r.replace("\'", "\"")
+        r = r.replace('sentiment_category\"','{\"sentiment_category\"')
+        r = r.replace('\" \"source_domain\"','\", \"source_domain\"')
+        r = r.replace('\"target_domain\": \",','\"target_domain\": \"\",')
+        cleaned_results.append(r)
+    return cleaned_labels, cleaned_results
+
+def compute_json_metric(pred):
+    # compute metric config
+    MODE = 'Full' # 'Full' means compute metrics for all the keys
+                  # while 'COT' only compute metrics for sentiment and intention keys
+    SIM = True # use similar model or not
+
+    if SIM:
+        simmodel = SimilarityModel()
+    if MODE == 'Full':
+        key_list = ['sentiment_category', 'sentiment_degree', 'intention_detection', 'offensiveness_detection', 'metaphor_occurrence', 'metaphor_category', 'target_domain', 'source_domain', 'target_modality', 'source_modality']
+    else:
+        key_list = ['sentiment_category', 'sentiment_degree', 'intention_detection', 'offensiveness_detection']
+    sentiment_category = ['happiness', 'love', 'anger', 'sorrow', 'fear', 'hate', 'surprise']
+    intention_detection = ['interactive', 'expressive', 'entertaining', 'offensive', 'other']
+    sentiment_dict = {}
+    intention_dict = {}
+    sentiment_length_dict = {}
+    intention_length_dict ={}
+    sentiment_true_list = []
+    sentiment_pred_list = []
+    intention_true_list = []
+    intention_pred_list = []
+    predictions, labels = pred
+    metaphor = 0
+    metaphor_acc = 0
+    acc_dict = {}
+    for key in key_list:
+        acc_dict[key]=0
+    for key in sentiment_category:
+        sentiment_dict[key]=0
+    for key in intention_detection:
+        intention_dict[key]=0
+    
+
+    with torch.no_grad():
+        model_path = '/mnt/afs/share/InternVL2-4B'
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path, add_eos_token=False, trust_remote_code=True, use_fast=False)
+        result = predictions[0]
+        
+        if 'InternVL25-4B' in model_path:
+            eos_token_id = 151645
+        else:
+            eos_token_id = 2
+        
+        for id, pred in enumerate(labels):
+            result[id][result[id] == -100] = eos_token_id
+            result[id][labels[id] == -100] = eos_token_id
+            labels[id][labels[id] == -100] = eos_token_id
+        result = tokenizer.batch_decode(result, skip_special_tokens=True)
+        label = tokenizer.batch_decode(labels, skip_special_tokens=True)
+    
+        label, result = format_label(label, result)
+
+        count = 0
+        wrong_list = []
+        for r, l in zip(result, label):
+            try:
+                label_dict = json.loads(l)
+            except json.JSONDecodeError as e:
+                print(e)
+                print(l)
+                exit()
+            if label_dict['sentiment_category'] not in sentiment_length_dict.keys():
+                sentiment_length_dict[label_dict['sentiment_category']] = 1
+            else:
+                sentiment_length_dict[label_dict['sentiment_category']] += 1
+        
+            if label_dict['intention_detection'] not in intention_length_dict.keys():
+                intention_length_dict[label_dict['intention_detection']] = 1
+            else:
+                intention_length_dict[label_dict['intention_detection']] += 1
+
+            try:
+                json.loads(r)
+            except json.JSONDecodeError as e:
+                print(e)
+                continue
+            else:
+                # json decode r and label, compare each key in keylist
+                r_dict = json.loads(r)
+                label_dict = json.loads(l)
+                for key in key_list:
+                    if key not in r_dict.keys():
+                        continue
+                    if SIM:
+                        if key == 'sentiment_category' and r_dict['sentiment_category'] not in sentiment_category:
+                            r_dict['sentiment_category'] = simmodel.compare_similarity(r_dict['sentiment_category'], sentiment_category)
+                        if key == 'intention_detection' and r_dict['intention_detection'] not in intention_detection:
+                            r_dict['intention_detection'] = simmodel.compare_similarity(r_dict['intention_detection'], intention_detection)
+                        
+                    if key == 'sentiment_category':
+                        sentiment_true_list.append(sentiment_category.index(label_dict['sentiment_category']))
+                        sentiment_pred_list.append(sentiment_category.index(r_dict['sentiment_category']))
+
+                    elif key == 'intention_detection' and r_dict['intention_detection'] in intention_detection:
+                        intention_true_list.append(intention_detection.index(label_dict['intention_detection']))
+                        intention_pred_list.append(intention_detection.index(r_dict['intention_detection']))
+
+
+                    if r_dict[key] == label_dict[key]:
+                        # print(f'{key} the same')
+                        acc_dict[key]+=1
+                        if key == 'sentiment_category':
+                            sentiment_dict[label_dict['sentiment_category']] += 1
+                        elif key == 'intention_detection':
+                            intention_dict[label_dict['intention_detection']] += 1
+                    else:
+                        if key == 'sentiment_category':
+                            wrong_list.append([count, r_dict['sentiment_category'], label_dict['sentiment_category'], label_dict])
+            count += 1
+
+    # return mean of acc_dict
+    for key in acc_dict:
+        acc_dict[key] /= len(result)
+    for key in sentiment_category:
+        acc_dict[key] = sentiment_dict[key] / sentiment_length_dict[key]
+    for key in intention_detection:
+        acc_dict[key] = intention_dict[key] / intention_length_dict[key]
+
+
+    print(acc_dict)
+    return acc_dict
+        
 
 def main():
     # Apply necessary patches for the transformers library
@@ -984,6 +1180,12 @@ def main():
         min_dynamic_patch=data_args.min_dynamic_patch, max_dynamic_patch=data_args.max_dynamic_patch,
         normalize_type=data_args.normalize_type, min_num_frame=data_args.min_num_frame,
         max_num_frame=data_args.max_num_frame)
+    eval_dataset = build_datasets(
+        data_args, tokenizer, tcs_loader, model, group_by_length=training_args.group_by_length,
+        dynamic_image_size=data_args.dynamic_image_size, use_thumbnail=data_args.use_thumbnail,
+        min_dynamic_patch=data_args.min_dynamic_patch, max_dynamic_patch=data_args.max_dynamic_patch,
+        normalize_type=data_args.normalize_type, min_num_frame=data_args.min_num_frame,
+        max_num_frame=data_args.max_num_frame, train=False)
 
     def _freeze_params(module):
         for param in module.parameters():
@@ -1025,6 +1227,9 @@ def main():
 
     # set seed for torch dataloaders
     set_seed(training_args.seed)
+    training_args.remove_unused_columns = False
+    training_args.eval_steps=50
+    training_args.per_device_eval_batch_size=8
 
     if data_args.use_packed_ds:
         collator = partial(
@@ -1042,10 +1247,13 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=None,
+        eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         data_collator=collator,
+        compute_metrics = compute_json_metric,
+        preprocess_logits_for_metrics = preprocess_logits_for_metrics
     )
+    trainer.add_callback(EvaluateFirstStepCallback())
 
     # Training
     if training_args.do_train:
