@@ -11,7 +11,6 @@ import random
 import sys
 import traceback
 import warnings
-import csv
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -866,7 +865,7 @@ def format_label(label, result):
         cleaned_results.append(r)
     return cleaned_labels, cleaned_results
 
-def compute_json_metric(pred):
+def compute_json_metric(pred, model_path: str):
     # compute metric config
     MODE = 'Full' # 'Full' means compute metrics for all the keys
                   # while 'COT' only compute metrics for sentiment and intention keys
@@ -901,7 +900,6 @@ def compute_json_metric(pred):
     
 
     with torch.no_grad():
-        model_path = '/mnt/afs/share/InternVL2-4B'
         tokenizer = AutoTokenizer.from_pretrained(
             model_path, add_eos_token=False, trust_remote_code=True, use_fast=False)
         result = predictions[0]
@@ -1250,7 +1248,7 @@ def main():
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         data_collator=collator,
-        compute_metrics = compute_json_metric,
+        compute_metrics=partial(compute_json_metric, model_path=model_args.model_name_or_path),
         preprocess_logits_for_metrics = preprocess_logits_for_metrics
     )
     trainer.add_callback(EvaluateFirstStepCallback())
