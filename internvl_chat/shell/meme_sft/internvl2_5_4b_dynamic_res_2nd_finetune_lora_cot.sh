@@ -11,7 +11,7 @@ export MASTER_PORT=34231
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
 
-OUTPUT_DIR='work_dirs/internvl_chat_v2_5/internvl2_5_4b_dynamic_res_2nd_finetune_lora_add_data'
+OUTPUT_DIR='work_dirs/internvl_chat_v2_5/internvl2_5_4b_dynamic_res_2nd_finetune_lora_add_data_cot'
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
@@ -29,12 +29,12 @@ torchrun \
   --nproc_per_node=${GPUS} \
   --master_port=${MASTER_PORT} \
   internvl/train/internvl_chat_finetune.py \
-  --model_name_or_path "/meme/InternVL25-4B" \
+  --model_name_or_path "/meme/checkpoint/add_data/" \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "/meme/data/data_E_json_relabel.jsonl" \
-  --meta_path_eval "/meme/data/data_E_json_eval_relabel.jsonl" \
+  --meta_path "/meme/data/data_E_json_cot_relabel.jsonl" \
+  --meta_path_eval "/meme/data/data_E_json_eval_cot_relabel.jsonl" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \

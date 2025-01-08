@@ -1,5 +1,5 @@
 accelerate
-bitsandbytes==0.41.0
+bitsandbytes==0.45.0
 decord
 deepspeed==0.13.5
 einops==0.6.1
@@ -25,3 +25,5 @@ torchvision>=0.15
 tqdm
 transformers==4.37.2
 yacs
+FlagEmbedding==1.3.3
+wandb==0.16.6

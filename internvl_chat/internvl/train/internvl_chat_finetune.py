@@ -829,7 +829,7 @@ class SimilarityModel():
             pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension())
             self.model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
         elif SIM_MODEL == 'bge':
-            model_path = '/mnt/afs/share/bge-base-zh-v1.5'
+            model_path = '/meme/bge-base-zh-v1.5'
             self.model = FlagModel(model_path, 
                   query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
                   use_fp16=True)
