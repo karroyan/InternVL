@@ -33,7 +33,7 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "/meme/data/data_E_json_relabel.jsonl" \
+  --meta_path "/meme/data/data_know_your_meme.jsonl" \
   --meta_path_eval "/meme/data/data_E_json_eval_relabel.jsonl" \
   --overwrite_output_dir True \
   --force_image_size 448 \
