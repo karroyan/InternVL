@@ -1,17 +1,17 @@
 set -x
 
-GPUS=${GPUS:-8}
-BATCH_SIZE=${BATCH_SIZE:-8}
+GPUS=${GPUS:-1}
+BATCH_SIZE=${BATCH_SIZE:-1}
 PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
 GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
 
 
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-export MASTER_PORT=34231
+export MASTER_PORT=34236
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
 
-OUTPUT_DIR='work_dirs/internvl_chat_v2_5/internvl2_5_4b_dynamic_res_2nd_finetune_lora_add_data'
+OUTPUT_DIR='work_dirs/internvl_chat_v2_5/internvl2_5_4b_dynamic_res_2nd_finetune_lora_transcode_adddata'
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
@@ -29,12 +29,12 @@ torchrun \
   --nproc_per_node=${GPUS} \
   --master_port=${MASTER_PORT} \
   internvl/train/internvl_chat_finetune.py \
-  --model_name_or_path "/meme/InternVL25-4B" \
+  --model_name_or_path "/mnt/afs/share/InternVL25-4B" \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "/meme/data/data_know_your_meme.jsonl" \
-  --meta_path_eval "/meme/data/data_E_json_eval_relabel.jsonl" \
+  --meta_path "/mnt/afs/niuyazhe/data/meme/data/data_knowyourmeme_transcode.jsonl" \
+  --meta_path_eval "/mnt/afs/niuyazhe/data/meme/data/data_E_json_eval_relabel_transcode.jsonl" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \
@@ -50,7 +50,7 @@ torchrun \
   --num_train_epochs 3 \
   --per_device_train_batch_size ${PER_DEVICE_BATCH_SIZE} \
   --gradient_accumulation_steps ${GRADIENT_ACC} \
-  --evaluation_strategy "no" \
+  --evaluation_strategy "steps" \
   --save_strategy "steps" \
   --save_steps 200 \
   --eval_steps 100 \

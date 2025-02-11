@@ -869,7 +869,7 @@ def compute_json_metric(pred, model_path: str):
     # compute metric config
     MODE = 'Full' # 'Full' means compute metrics for all the keys
                   # while 'COT' only compute metrics for sentiment and intention keys
-    SIM = True # use similar model or not
+    SIM = False # use similar model or not
 
     if SIM:
         simmodel = SimilarityModel()
@@ -877,8 +877,8 @@ def compute_json_metric(pred, model_path: str):
         key_list = ['sentiment_category', 'sentiment_degree', 'intention_detection', 'offensiveness_detection', 'metaphor_occurrence', 'metaphor_category', 'target_domain', 'source_domain', 'target_modality', 'source_modality']
     else:
         key_list = ['sentiment_category', 'sentiment_degree', 'intention_detection', 'offensiveness_detection']
-    sentiment_category = ['happiness', 'love', 'anger', 'sorrow', 'fear', 'hate', 'surprise']
-    intention_detection = ['interactive', 'expressive', 'entertaining', 'offensive']
+    sentiment_category = ['1', '2', '3', '4', '5', '6', '7']
+    intention_detection = ['1', '2', '3', '4']
     sentiment_dict = {}
     intention_dict = {}
     sentiment_length_dict = {}
@@ -904,7 +904,7 @@ def compute_json_metric(pred, model_path: str):
             model_path, add_eos_token=False, trust_remote_code=True, use_fast=False)
         result = predictions[0]
         
-        if 'InternVL25-4B' in model_path:
+        if 'InternVL25-4B' in model_path or 'checkpoint' in model_path:
             eos_token_id = 151645
         else:
             eos_token_id = 2
