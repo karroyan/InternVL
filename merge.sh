@@ -1,0 +1,2 @@
+export PYTHONPATH=$PYTHONPATH:/mnt/afs/lixueyan/meme/InternVL/internvl_chat
+python internvl_chat/tools/merge_weights.py --input_path="/mnt/afs/lixueyan/meme/checkpoint/reward_model/only_irrelevant_0226/checkpoint-10776" --output_path="/mnt/afs/lixueyan/meme/checkpoint/reward_model/merged/only_irrelevant_0226" --checkpoint_path="/mnt/afs/lixueyan/meme/checkpoint/reward_model/only_irrelevant_0226/checkpoint-10776"

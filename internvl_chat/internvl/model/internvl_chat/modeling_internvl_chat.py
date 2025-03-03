@@ -85,6 +85,7 @@ class InternVLChatModel(PreTrainedModel):
 
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
+        self.hidden_size = llm_hidden_size
 
         self.mlp1 = nn.Sequential(
             nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
@@ -353,7 +354,7 @@ class InternVLChatModel(PreTrainedModel):
         img_context_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
         self.img_context_token_id = img_context_token_id
 
-        template = get_conv_template(self.template)
+        template = get_conv_template(self.template) 
         template.system_message = self.system_message
         eos_token_id = tokenizer.convert_tokens_to_ids(template.sep.strip())
 

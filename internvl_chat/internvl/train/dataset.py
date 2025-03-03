@@ -747,6 +747,7 @@ def preprocess_internvl2_5(
         assert current_image_idx == num_image, f'{current_image_idx} != {num_image}'
 
     batches, roles = [], []
+    label_class_batch = []
     if system_prompt is not None:
         batches.append(f'<|im_start|>system\n{system_prompt}<|im_end|>\n')
         roles.append('system')
@@ -755,8 +756,9 @@ def preprocess_internvl2_5(
             batches.append(f'<|im_start|>user\n{conversation["value"]}<|im_end|>\n')
             roles.append('human')
         elif conversation['from'] == 'gpt':
-            batches.append(f'<|im_start|>assistant\n{conversation["value"]}<|im_end|>\n')
+            batches.append(f'<|im_start|>assistant\n<|im_end|>\n')
             roles.append('gpt')
+            label_class_batch.append(conversation["value"])
         else:
             raise NotImplementedError
 
@@ -806,6 +808,7 @@ def preprocess_internvl2_5(
     return dict(
         input_ids=input_ids,
         labels=targets,
+        label_class=label_class_batch,
         attention_mask=input_ids.ne(tokenizer.pad_token_id),
     )
 
