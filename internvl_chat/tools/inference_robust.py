@@ -114,134 +114,269 @@ model = InternVLSequenceClassificationModel.from_pretrained(
     _fast_init=False, add_classify_head = 'last_hidden_states', pooling = 'attention').eval().cuda()
 tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, use_fast=False)
 
-# Define paths for all three datasets
-dataset_paths = [
-    '/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/irrelevantmeme/Ejson/irrelevantmeme_test.jsonl',
-    '/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/boringmeme/Ejson/boringmeme_test.jsonl',
-    '/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/lowperformancememe/Ejson/lowperformancememe_test.jsonl'
-]
+# Define paths for the dataset
+dataset_path = '/fs-computility/ai-shen/lixueyan/meme/memetrash/Eimages_original/'
 
-# Dictionary to store wrong predictions for each dataset
-wrong_meme_lists = {path: [] for path in dataset_paths}
-# Dictionary to store image numbers from wrong predictions
-wrong_image_numbers = {path: [] for path in dataset_paths}
-
-# Process each dataset
-for dataset_path in dataset_paths:
-    data = load_jsonl(dataset_path)
+def compare_images(model, tokenizer, img_path1, img_path2, batch_size=1):
+    """
+    Compare two images and return which one is better (1 if first image, 2 if second image)
+    Can process multiple image pairs in parallel if batch_size > 1
     
-    acc_count = 0
-    whole_count = 0
+    Args:
+        model: The model to use for comparison
+        tokenizer: The tokenizer to use
+        img_path1: Path(s) to first image(s) - string or list of strings
+        img_path2: Path(s) to second image(s) - string or list of strings
+        batch_size: Number of image pairs to process in parallel
+        
+    Returns:
+        List of results (1 or 2) for each image pair
+    """
+    # try:
+    # Convert to lists if single paths are provided
+    if isinstance(img_path1, str):
+        img_path1 = [img_path1]
+        img_path2 = [img_path2]
+        
+    assert len(img_path1) == len(img_path2), "Number of images in both lists must be equal"
     
-    # Process data in batches
-    batch_size = 32  # You can adjust this based on your GPU memory
-    for i in range(0, len(data), batch_size):
-        batch_data = data[i:i+batch_size]
-        batch_questions = []
-        batch_labels = []
-        batch_pixel_values = []
-        batch_num_patches_list = []
+    results = []
+    # Process in batches
+    for i in range(0, len(img_path1), batch_size):
+        batch_img1 = img_path1[i:i+batch_size]
+        batch_img2 = img_path2[i:i+batch_size]
         
-        # Prepare batch data
-        for d in batch_data:
-            try:
-                pixel_values1 = load_image(d['image'][0], max_num=6).to(torch.bfloat16).cuda()
-                pixel_values2 = load_image(d['image'][1], max_num=6).to(torch.bfloat16).cuda()
-                batch_pixel_values.append(torch.cat((pixel_values1, pixel_values2), dim=0))
-                batch_num_patches_list.extend([pixel_values1.size(0), pixel_values2.size(0)])
-                batch_questions.append(d['conversations'][0]['value'])
-                batch_labels.append(d['conversations'][1]['value'])
-                whole_count += 1
-            except Exception as e:
-                print(f"Error preparing data for batch: {e}")
-                continue
+        # Load all images in current batch
+        all_pixel_values = []
+        num_patches_list = []
         
-        if not batch_questions:
-            continue
-            
-        # Concatenate all pixel values
-        pixel_values = torch.cat(batch_pixel_values, dim=0)
+        for path1, path2 in zip(batch_img1, batch_img2):
+            pixel_values1 = load_image(path1, max_num=6).to(torch.bfloat16).cuda()
+            pixel_values2 = load_image(path2, max_num=6).to(torch.bfloat16).cuda()
+            all_pixel_values.append(torch.cat((pixel_values1, pixel_values2), dim=0))
+            num_patches_list.append([pixel_values1.size(0), pixel_values2.size(0)])
         
-        # Process batch
+        # Concatenate all images into a single batch
+        pixel_values = torch.cat(all_pixel_values, dim=0)
+        assert pixel_values.numel() > 0, "Pixel values are empty!"
+        
+        # Flatten num_patches_list for the model
+        flat_num_patches_list = [item for sublist in num_patches_list for item in sublist]
+        
         generation_config = dict(max_new_tokens=1024, do_sample=False, num_beams=1)
-        try:
-            responses = model.chat_batch(
-                tokenizer, 
-                pixel_values, 
-                batch_questions, 
-                generation_config, 
-                num_patches_list=batch_num_patches_list, 
-                history=None,
-                batch_size=len(batch_questions)
-            )
-            
-            # Process results
-            for j, (response, label, d) in enumerate(zip(responses, batch_labels, batch_data)):
-                if int(response) == label:
-                    acc_count += 1
-                else:
-                    wrong_meme_lists[dataset_path].append(d)
-                    
-                    # Extract image numbers from the image paths
-                    for img_path in d['image']:
-                        try:
-                            img_name = os.path.basename(img_path)
-                            if '(' in img_name and ')' in img_name:
-                                num_str = img_name.split('(')[1].split(')')[0].strip()
-                                wrong_image_numbers[dataset_path].append(int(num_str))
-                        except:
-                            pass
-        except Exception as e:
-            print(f"Error processing batch: {e}")
-            # Fall back to individual processing if batch fails
-            for j, d in enumerate(batch_data):
-                try:
-                    pixel_values1 = load_image(d['image'][0], max_num=6).to(torch.bfloat16).cuda()
-                    pixel_values2 = load_image(d['image'][1], max_num=6).to(torch.bfloat16).cuda()
-                    pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
-                    num_patches_list = [pixel_values1.size(0), pixel_values2.size(0)]
-                    question = d['conversations'][0]['value']
-                    label = d['conversations'][1]['value']
-                    response = model.chat(tokenizer, pixel_values, question, generation_config, num_patches_list=num_patches_list, history=None)
-                    if int(response[0]) == label:
-                        acc_count += 1
-                    else:
-                        wrong_meme_lists[dataset_path].append(d)
-                        
-                        # Extract image numbers from the image paths
-                        for img_path in d['image']:
-                            try:
-                                img_name = os.path.basename(img_path)
-                                if '(' in img_name and ')' in img_name:
-                                    num_str = img_name.split('(')[1].split(')')[0].strip()
-                                    wrong_image_numbers[dataset_path].append(int(num_str))
-                            except:
-                                pass
-                except Exception as e:
-                    print(f"Error processing individual data: {e}")
-                    continue
+        question = open('/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/prompt/reward_model_prompt.txt', 'r').read() + '\n\n\nFirst image: <image>\nSecond image:<image>'
+        
+        # Process the batch
+        responses = model.chat_batch(
+            tokenizer, 
+            pixel_values, 
+            [question] * len(batch_img1), 
+            generation_config, 
+            num_patches_list=flat_num_patches_list, 
+            batch_size=len(batch_img1)
+        )
+        
+        # Process responses
+        for response in responses:
+            if int(response) == 0:
+                results.append(1)
+            elif int(response) == 1:
+                results.append(2)
+            else:
+                # Default to first image if response is unclear
+                print(f"Unclear response: {response}, defaulting to 1")
+                results.append(1)
+                
+    return results if len(results) > 1 else results[0]
+    # except Exception as e:
+    #     print(f"Error comparing images: {e}")
+    #     return [1] * len(img_path1) if isinstance(img_path1, list) else 1  # Default to first image on error
 
-    print(f"Accuracy for {dataset_path}: {acc_count/whole_count}")
+def check_comparison_robustness(model, tokenizer, image_paths, num_samples=500, batch_size=32):
+    """
+    Check whether the comparison is robust by testing for transitivity violations.
+    Tests random pairs of images and builds a directed graph to check for cycles.
+    Uses batched processing for efficiency.
     
-    # Save wrong predictions for each dataset
-    output_filename = f'wrong_meme_by_irrelevant_model_on_{os.path.basename(dataset_path).split(".")[0]}.json'
-    with open(output_filename, 'w') as f:
-        json.dump(wrong_meme_lists[dataset_path], f)
+    Args:
+        model: The model to use for comparison
+        tokenizer: The tokenizer for the model
+        image_paths: List of image paths to compare
+        num_samples: Number of comparisons to make
+        batch_size: Number of comparisons to process in parallel
+    
+    Returns:
+        is_robust: Boolean indicating whether the comparison is robust
+        violations: List of cycles found (transitivity violations)
+    """
+    import random
+    import networkx as nx
+    
+    # Create a directed graph
+    G = nx.DiGraph()
+    
+    # Add all image paths as nodes
+    for path in image_paths:
+        G.add_node(path)
+    
+    # Perform random comparisons
+    comparisons_made = 0
+    print(f"Making {num_samples} random comparisons with batch size {batch_size}...")
+    
+    # Keep track of pending comparisons to batch them
+    pending_img1 = []
+    pending_img2 = []
+    
+    while comparisons_made < num_samples:
+        # Fill the batch with valid comparison pairs
+        while len(pending_img1) < batch_size and comparisons_made + len(pending_img1) < num_samples:
+            # Select two random images
+            img1, img2 = random.sample(image_paths, 2)
+            
+            # Skip if we've already compared these
+            if G.has_edge(img1, img2) or G.has_edge(img2, img1):
+                continue
+            
+            pending_img1.append(img1)
+            pending_img2.append(img2)
+        
+        # If we have comparisons to process
+        if pending_img1:
+            # Process the batch
+            results = compare_images(model, tokenizer, pending_img1, pending_img2, batch_size=len(pending_img1))
+            
+            # Make sure results is a list even if only one comparison was made
+            if not isinstance(results, list):
+                results = [results]
+            
+            # Add edges to graph based on results
+            for i, result in enumerate(results):
+                img1, img2 = pending_img1[i], pending_img2[i]
+                if result == 1:
+                    G.add_edge(img1, img2)  # img1 is better than img2
+                else:
+                    G.add_edge(img2, img1)  # img2 is better than img1
+            
+            # Update progress
+            comparisons_made += len(pending_img1)
+            print(f"Completed {comparisons_made}/{num_samples} comparisons")
+            
+            # Clear pending lists for next batch
+            pending_img1 = []
+            pending_img2 = []
+    
+    # Check for cycles (transitivity violations)
+    violations = list(nx.simple_cycles(G))
+    is_robust = len(violations) == 0
+    
+    # Print results
+    if is_robust:
+        print("Comparison is robust! No transitivity violations found.")
+    else:
+        print(f"Found {len(violations)} transitivity violations.")
+        for i, cycle in enumerate(violations[:5]):  # Show first 5 violations
+            cycle_names = [os.path.basename(path) for path in cycle]
+            print(f"Violation {i+1}: {' > '.join(cycle_names)} > {cycle_names[0]}")
 
-# Find images that are wrong in all three datasets
-# First, convert lists to sets for intersection operation
-image_sets = [set(wrong_image_numbers[path]) for path in dataset_paths]
+    
+    return is_robust, violations
 
-# Find the intersection of all three sets
-common_wrong_images = set.intersection(*image_sets) if image_sets else set()
+def merge_sort_ranking(model, tokenizer, image_paths):
+    """Use merge sort approach to rank images with minimal comparisons"""
+    if len(image_paths) <= 1:
+        return image_paths
+    
+    # Split the list in half
+    mid = len(image_paths) // 2
+    left = merge_sort_ranking(model, tokenizer, image_paths[:mid])
+    right = merge_sort_ranking(model, tokenizer, image_paths[mid:])
+    
+    # Merge the sorted halves
+    result = []
+    i = j = 0
+    
+    while i < len(left) and j < len(right):
+        comparison = compare_images(model, tokenizer, left[i], right[j])
+        if comparison == 1:
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+    
+    # Add any remaining elements
+    result.extend(left[i:])
+    result.extend(right[j:])
+    
+    return result
 
-print(f"Number of images wrong in all three datasets: {len(common_wrong_images)}")
-print(f"Common wrong image numbers: {sorted(list(common_wrong_images))}")
+# Main execution
+def main():
+    print(f"Loading images from {dataset_path}")
+    
+    # Get all image files from the directory
+    image_files = []
+    for root, _, files in os.walk(dataset_path):
+        for file in files:
+            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                image_files.append(os.path.join(root, file))
+    
+    print(f"Found {len(image_files)} images")
+    
+    # Limit the number of images for testing
+    max_images = 50  # Adjust as needed
+    if len(image_files) > max_images:
+        print(f"Limiting to {max_images} random images for robustness testing")
+        import random
+        image_files = random.sample(image_files, max_images)
+    
+    # Check robustness of comparisons
+    print("Testing comparison robustness...")
+    is_robust, violations = check_comparison_robustness(model, tokenizer, image_files, num_samples=1000)
+    
+    # Save the robustness results
+    robustness_results = {
+        "is_robust": is_robust,
+        "num_violations": len(violations),
+        "violations": [
+            {
+                "cycle": [os.path.basename(path) for path in cycle]
+            } for cycle in violations[:20]  # Limit to first 20 violations
+        ],
+        "images_tested": len(image_files),
+        "comparisons_made": 200
+    }
+    
+    with open('comparison_robustness_results.json', 'w') as f:
+        json.dump(robustness_results, f, indent=2)
+    
+    print(f"Robustness testing completed. Results saved to comparison_robustness_results.json")
+    
+    # Optionally, still perform the ranking
+    if input("Do you want to proceed with ranking the images? (y/n): ").lower() == 'y':
+        print("Starting image ranking...")
+        ranked_images = merge_sort_ranking(model, tokenizer, image_files)
+        
+        # Save the ranking results
+        ranking_results = {
+            "ranking": [
+                {
+                    "rank": i+1,
+                    "image_path": img_path,
+                    "image_name": os.path.basename(img_path)
+                } for i, img_path in enumerate(ranked_images)
+            ]
+        }
+        
+        with open('image_ranking_results.json', 'w') as f:
+            json.dump(ranking_results, f, indent=2)
+        
+        print(f"Ranking completed. Results saved to image_ranking_results.json")
 
-# Save the list of common wrong image numbers
-with open('common_wrong_image_numbers.json', 'w') as f:
-    json.dump(sorted(list(common_wrong_images)), f)
+if __name__ == "__main__":
+    main()
 
+# Comment out or remove the previous code that's not needed for ranking
 #     # set the max number of tiles in `max_num`
 # pixel_values1 = load_image('/mnt/afs/xueyingyi/image_vague/image/image_ (3999).jpg', max_num=12).to(torch.bfloat16).cuda()
 # pixel_values2 = load_image('/mnt/afs/xueyingyi/image_vague/image/image_ (3998).jpg', max_num=12).to(torch.bfloat16).cuda()

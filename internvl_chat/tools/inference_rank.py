@@ -114,134 +114,103 @@ model = InternVLSequenceClassificationModel.from_pretrained(
     _fast_init=False, add_classify_head = 'last_hidden_states', pooling = 'attention').eval().cuda()
 tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, use_fast=False)
 
-# Define paths for all three datasets
-dataset_paths = [
-    '/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/irrelevantmeme/Ejson/irrelevantmeme_test.jsonl',
-    '/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/boringmeme/Ejson/boringmeme_test.jsonl',
-    '/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/lowperformancememe/Ejson/lowperformancememe_test.jsonl'
-]
+# Define paths for the dataset
+dataset_path = '/fs-computility/ai-shen/lixueyan/meme/memetrash/Eimages_original/'
 
-# Dictionary to store wrong predictions for each dataset
-wrong_meme_lists = {path: [] for path in dataset_paths}
-# Dictionary to store image numbers from wrong predictions
-wrong_image_numbers = {path: [] for path in dataset_paths}
-
-# Process each dataset
-for dataset_path in dataset_paths:
-    data = load_jsonl(dataset_path)
-    
-    acc_count = 0
-    whole_count = 0
-    
-    # Process data in batches
-    batch_size = 32  # You can adjust this based on your GPU memory
-    for i in range(0, len(data), batch_size):
-        batch_data = data[i:i+batch_size]
-        batch_questions = []
-        batch_labels = []
-        batch_pixel_values = []
-        batch_num_patches_list = []
-        
-        # Prepare batch data
-        for d in batch_data:
-            try:
-                pixel_values1 = load_image(d['image'][0], max_num=6).to(torch.bfloat16).cuda()
-                pixel_values2 = load_image(d['image'][1], max_num=6).to(torch.bfloat16).cuda()
-                batch_pixel_values.append(torch.cat((pixel_values1, pixel_values2), dim=0))
-                batch_num_patches_list.extend([pixel_values1.size(0), pixel_values2.size(0)])
-                batch_questions.append(d['conversations'][0]['value'])
-                batch_labels.append(d['conversations'][1]['value'])
-                whole_count += 1
-            except Exception as e:
-                print(f"Error preparing data for batch: {e}")
-                continue
-        
-        if not batch_questions:
-            continue
-            
-        # Concatenate all pixel values
-        pixel_values = torch.cat(batch_pixel_values, dim=0)
-        
-        # Process batch
+def compare_images(model, tokenizer, img_path1, img_path2):
+    """Compare two images and return which one is better (1 if first image, 2 if second image)"""
+    try:
+        pixel_values1 = load_image(img_path1, max_num=6).to(torch.bfloat16).cuda()
+        pixel_values2 = load_image(img_path2, max_num=6).to(torch.bfloat16).cuda()
+        pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
+        num_patches_list = [pixel_values1.size(0), pixel_values2.size(0)]
+        assert pixel_values.numel() > 0, "Pixel values are empty!"
         generation_config = dict(max_new_tokens=1024, do_sample=False, num_beams=1)
-        try:
-            responses = model.chat_batch(
-                tokenizer, 
-                pixel_values, 
-                batch_questions, 
-                generation_config, 
-                num_patches_list=batch_num_patches_list, 
-                history=None,
-                batch_size=len(batch_questions)
-            )
-            
-            # Process results
-            for j, (response, label, d) in enumerate(zip(responses, batch_labels, batch_data)):
-                if int(response) == label:
-                    acc_count += 1
-                else:
-                    wrong_meme_lists[dataset_path].append(d)
-                    
-                    # Extract image numbers from the image paths
-                    for img_path in d['image']:
-                        try:
-                            img_name = os.path.basename(img_path)
-                            if '(' in img_name and ')' in img_name:
-                                num_str = img_name.split('(')[1].split(')')[0].strip()
-                                wrong_image_numbers[dataset_path].append(int(num_str))
-                        except:
-                            pass
-        except Exception as e:
-            print(f"Error processing batch: {e}")
-            # Fall back to individual processing if batch fails
-            for j, d in enumerate(batch_data):
-                try:
-                    pixel_values1 = load_image(d['image'][0], max_num=6).to(torch.bfloat16).cuda()
-                    pixel_values2 = load_image(d['image'][1], max_num=6).to(torch.bfloat16).cuda()
-                    pixel_values = torch.cat((pixel_values1, pixel_values2), dim=0)
-                    num_patches_list = [pixel_values1.size(0), pixel_values2.size(0)]
-                    question = d['conversations'][0]['value']
-                    label = d['conversations'][1]['value']
-                    response = model.chat(tokenizer, pixel_values, question, generation_config, num_patches_list=num_patches_list, history=None)
-                    if int(response[0]) == label:
-                        acc_count += 1
-                    else:
-                        wrong_meme_lists[dataset_path].append(d)
-                        
-                        # Extract image numbers from the image paths
-                        for img_path in d['image']:
-                            try:
-                                img_name = os.path.basename(img_path)
-                                if '(' in img_name and ')' in img_name:
-                                    num_str = img_name.split('(')[1].split(')')[0].strip()
-                                    wrong_image_numbers[dataset_path].append(int(num_str))
-                            except:
-                                pass
-                except Exception as e:
-                    print(f"Error processing individual data: {e}")
-                    continue
+        question = open('/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/prompt/reward_model_prompt.txt', 'r').read() + '\n\n\nFirst image: <image>\nSecond image:<image>'
+        response = model.chat(tokenizer, pixel_values, question, generation_config, num_patches_list=num_patches_list, history=None)
+        
+        # Extract just the number from the response
+        if int(response[0])==0:
+            return 1
+        elif int(response[0])==1:
+            return 2
+        else:
+            # Default to first image if response is unclear
+            print(f"Unclear response: {response}, defaulting to 1")
+            return 1
+    except Exception as e:
+        print(f"Error comparing images: {e}")
+        return 1  # Default to first image on error
 
-    print(f"Accuracy for {dataset_path}: {acc_count/whole_count}")
+def merge_sort_ranking(model, tokenizer, image_paths):
+    """Use merge sort approach to rank images with minimal comparisons"""
+    if len(image_paths) <= 1:
+        return image_paths
     
-    # Save wrong predictions for each dataset
-    output_filename = f'wrong_meme_by_irrelevant_model_on_{os.path.basename(dataset_path).split(".")[0]}.json'
-    with open(output_filename, 'w') as f:
-        json.dump(wrong_meme_lists[dataset_path], f)
+    # Split the list in half
+    mid = len(image_paths) // 2
+    left = merge_sort_ranking(model, tokenizer, image_paths[:mid])
+    right = merge_sort_ranking(model, tokenizer, image_paths[mid:])
+    
+    # Merge the sorted halves
+    result = []
+    i = j = 0
+    
+    while i < len(left) and j < len(right):
+        comparison = compare_images(model, tokenizer, left[i], right[j])
+        if comparison == 1:
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+    
+    # Add any remaining elements
+    result.extend(left[i:])
+    result.extend(right[j:])
+    
+    return result
 
-# Find images that are wrong in all three datasets
-# First, convert lists to sets for intersection operation
-image_sets = [set(wrong_image_numbers[path]) for path in dataset_paths]
+# Main execution
+def main():
+    print(f"Loading images from {dataset_path}")
+    
+    # Get all image files from the directory
+    image_files = []
+    for root, _, files in os.walk(dataset_path):
+        for file in files:
+            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                image_files.append(os.path.join(root, file))
+    
+    print(f"Found {len(image_files)} images")
+    
+    # Limit the number of images if needed for testing
+    # image_files = image_files[:20]  # Uncomment to limit to first 20 images
+    
+    # Rank the images
+    print("Starting image ranking...")
+    ranked_images = merge_sort_ranking(model, tokenizer, image_files)
+    
+    # Save the ranking results
+    ranking_results = {
+        "ranking": [
+            {
+                "rank": i+1,
+                "image_path": img_path,
+                "image_name": os.path.basename(img_path)
+            } for i, img_path in enumerate(ranked_images)
+        ]
+    }
+    
+    with open('image_ranking_results.json', 'w') as f:
+        json.dump(ranking_results, f, indent=2)
+    
+    print(f"Ranking completed. Results saved to image_ranking_results.json")
 
-# Find the intersection of all three sets
-common_wrong_images = set.intersection(*image_sets) if image_sets else set()
+if __name__ == "__main__":
+    main()
 
-print(f"Number of images wrong in all three datasets: {len(common_wrong_images)}")
-print(f"Common wrong image numbers: {sorted(list(common_wrong_images))}")
-
-# Save the list of common wrong image numbers
-with open('common_wrong_image_numbers.json', 'w') as f:
-    json.dump(sorted(list(common_wrong_images)), f)
-
+# Comment out or remove the previous code that's not needed for ranking
 #     # set the max number of tiles in `max_num`
 # pixel_values1 = load_image('/mnt/afs/xueyingyi/image_vague/image/image_ (3999).jpg', max_num=12).to(torch.bfloat16).cuda()
 # pixel_values2 = load_image('/mnt/afs/xueyingyi/image_vague/image/image_ (3998).jpg', max_num=12).to(torch.bfloat16).cuda()

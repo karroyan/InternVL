@@ -1,8 +1,8 @@
 set -x
 
-GPUS=${GPUS:-1}
-BATCH_SIZE=${BATCH_SIZE:-1}
-PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
+GPUS=${GPUS:-4}
+BATCH_SIZE=${BATCH_SIZE:-32}
+PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-8}
 GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
 
 
@@ -11,7 +11,7 @@ export MASTER_PORT=34228
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
 
-OUTPUT_DIR='/mnt/afs/lixueyan/meme/checkpoint/reward_model/only_lowquality_0227_last_last'
+OUTPUT_DIR='/mnt/afs/lixueyan/meme/checkpoint/reward_model/lowperformance_cross_last_attention_0312'
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
@@ -33,8 +33,8 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "/mnt/afs/lixueyan/meme/data/lowperformancememe/lowperformancememe_train.jsonl" \
-  --meta_path_eval "/mnt/afs/lixueyan/meme/data/lowperformancememe/lowperformancememe_test.jsonl" \
+  --meta_path "/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/lowperformancememe_cross/lowperformancememe_cross_train.jsonl" \
+  --meta_path_eval "/fs-computility/ai-shen/lixueyan/meme/dataset-meme-rewardmodel/lowperformancememe_cross/lowperformancememe_cross_test.jsonl" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \

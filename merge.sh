@@ -1,2 +1,3 @@
-export PYTHONPATH=$PYTHONPATH:/mnt/afs/lixueyan/meme/InternVL/internvl_chat
-python internvl_chat/tools/merge_weights.py --input_path="/mnt/afs/lixueyan/meme/checkpoint/reward_model/only_irrelevant_0226/checkpoint-10776" --output_path="/mnt/afs/lixueyan/meme/checkpoint/reward_model/merged/only_irrelevant_0226" --checkpoint_path="/mnt/afs/lixueyan/meme/checkpoint/reward_model/only_irrelevant_0226/checkpoint-10776"
+export PYTHONPATH=$PYTHONPATH:/fs-computility/ai-shen/lixueyan/meme/InternVL/internvl_chat/
+python internvl_chat/tools/merge_weights.py \
+    --input_path="/fs-computility/ai-shen/lixueyan/meme/checkpoint/reward_model/irrelevant_last_attention_0314/checkpoint-1130"  --checkpoint_path="/fs-computility/ai-shen/lixueyan/meme/checkpoint/reward_model/irrelevant_last_attention_0314/checkpoint-1130" --output_path="/fs-computility/ai-shen/lixueyan/meme/checkpoint/reward_model/merged/irrelevant_1130"
